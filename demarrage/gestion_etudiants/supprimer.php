@@ -18,15 +18,18 @@ $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
 if ($id) {
     $pdo = getConnexion();
 
-    // TODO 5.2.a : préparer la requête DELETE ... WHERE id = :id
+    // 5.2.a : préparer la requête DELETE ... WHERE id = :id
+    $stmt = $pdo->prepare('DELETE FROM etudiants WHERE id = :id');
 
+    // 5.2.b : lier :id avec bindValue() en précisant PDO::PARAM_INT, puis exécuter
+    $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+    $stmt->execute();
 
-    // TODO 5.2.b : lier :id avec bindValue() en précisant PDO::PARAM_INT, puis exécuter
-
-
-    // TODO 5.2.c : si rowCount() vaut 1, rediriger vers liste.php?supprime=1
-
-
+    // 5.2.c : si rowCount() vaut 1, rediriger vers liste.php?supprime=1
+    if ($stmt->rowCount() === 1) {
+        header('Location: liste.php?supprime=1');
+        exit;
+    }
 }
 
 header('Location: liste.php');
