@@ -1,0 +1,190 @@
+=====================================================================
+TP 5 — Maîtriser PDO en PHP : réponses aux questions
+Nom : AIT BAHA Wafa
+Environnement : XAMPP (Windows), Apache 2.4, PHP 8.2.12, MariaDB 10.4.32
+Base : gestion_etudiants (utf8mb4), utilisateur root sans mot de passe
+=====================================================================
+
+
+---------------------------------------------------------------------
+QUESTION 1 — Provoquer des erreurs de connexion volontairement
+---------------------------------------------------------------------
+
+Pour chaque essai, une seule constante de config/config.php est
+modifiée, puis on recharge http://localhost/gestion_etudiants/.
+Le message affiché vient du die() placé dans le catch de
+getConnexion() (TODO 2.3).
+
+1) Mot de passe erroné : DB_PASS = 'abc'
+
+   Message obtenu :
+   SQLSTATE[HY000] [1045] Access denied for user 'root'@'localhost'
+   (using password: YES)
+
+   Lecture : SQLSTATE[HY000] = erreur générale du driver ; [1045] =
+   identifiants refusés. « using password: YES » indique que PHP a
+   bien envoyé un mot de passe, mais que MySQL le rejette. La
+   connexion est refusée avant l'ouverture de la base : rien ne
+   s'exécute.
+
+   Correction : remettre DB_PASS = '' (sous XAMPP/WAMP, root n'a pas
+   de mot de passe par défaut ; sous MAMP ce serait 'root').
+
+2) Nom de base inexistant : DB_NAME = 'gestion_etudiants_inexistante'
+
+   Message obtenu :
+   SQLSTATE[HY000] [1049] Unknown database
+   'gestion_etudiants_inexistante'
+
+   Lecture : le serveur est joignable et l'utilisateur est accepté,
+   mais la base demandée dans le DSN (dbname=...) n'existe pas.
+
+   Correction : importer sql/creation_base.sql dans phpMyAdmin et
+   vérifier l'orthographe exacte de DB_NAME.
+
+3) Port erroné : DB_PORT = '3307'
+
+   Message obtenu :
+   SQLSTATE[HY000] [2002] Aucune connexion n'a pu être établie car
+   l'ordinateur cible l'a expressément refusée
+
+   Lecture : [2002] signifie que le serveur MySQL n'est pas joignable
+   sur host:port (ici « Connection refused » en anglais). Aucun
+   processus n'écoute sur 3307 alors que MariaDB écoute sur 3306. Ce
+   n'est donc pas un problème d'identifiants mais de réseau/port :
+   MySQL est arrêté, ou le port est différent (MAMP utilise 8889).
+
+   Correction : remettre 3306 et démarrer MySQL dans le panneau XAMPP.
+
+Bilan : les trois erreurs sont détectées au moment de la connexion
+(new PDO), avant toute requête SQL, et le script s'arrête proprement
+au lieu d'afficher une page blanche ou un warning. C'est l'intérêt de
+PDO::ERRMODE_EXCEPTION associé à try/catch.
+
+
+---------------------------------------------------------------------
+QUESTION 2 — Pourquoi la requête préparée règle les deux problèmes
+---------------------------------------------------------------------
+
+Code dangereux rappelé :
+$pdo->exec("INSERT INTO etudiants (nom) VALUES ('" . $_POST['nom'] . "')");
+
+a) L'étudiant s'appelle O'Brien
+   La valeur est collée telle quelle entre deux apostrophes :
+       VALUES ('O'Brien')
+   L'apostrophe du nom ferme la chaîne SQL ; « Brien') » devient du
+   code SQL invalide. MySQL renvoie une erreur de syntaxe
+   (SQLSTATE[42000] ... near 'Brien') et l'insertion échoue. Le
+   problème n'est pas l'apostrophe en soi mais sa non-distinction
+   entre « donnée » et « code SQL ».
+
+b) Saisie : x'); DELETE FROM etudiants; --
+   La requête construite devient :
+       INSERT INTO etudiants (nom) VALUES ('x'); DELETE FROM etudiants; --')
+   Le « ; » enchaîne une seconde instruction et « -- » met la fin de
+   la requête initiale en commentaire : la table est vidée. C'est une
+   injection SQL classique (ici destructrice ; elle pourrait aussi
+   être utilisée pour lire des données : ' OR '1'='1).
+
+c) Pourquoi prepare()/execute() protège des deux
+   Avec une requête préparée, le SQL part avec des marqueurs et ne
+   contient jamais la donnée :
+       INSERT INTO etudiants (nom) VALUES (:nom)
+   MySQL analyse et compile cette requête une seule fois. Les valeurs
+   sont ensuite envoyées séparément (protocole binaire) et associées
+   aux marqueurs. Elles ne sont donc jamais ré-analysées comme du SQL :
+   - O'Brien est transmis comme texte et stocké tel quel ;
+   - x'); DELETE FROM etudiants; -- est stocké comme une simple chaîne
+     de caractères, il ne peut plus créer d'instruction.
+   Il n'y a plus de concaténation, donc plus d'échappement manuel à
+   oublier. En plus, bindValue()/PDO::PARAM_INT garantit le type, et
+   PDO::ATTR_EMULATE_PREPARES => false impose de vraies requêtes
+   préparées côté serveur (et non une simple simulation par PDO).
+
+   Règle retenue : requêtes préparées pour toute donnée qui entre,
+   htmlspecialchars() (fonction e()) pour toute donnée qui sort.
+
+
+---------------------------------------------------------------------
+QUESTION 3 — Pourquoi rediriger (Post/Redirect/Get) au lieu d'afficher
+              directement la liste après l'insertion ?
+---------------------------------------------------------------------
+
+Si ajouter.php se contentait d'afficher la liste après l'INSERT, la
+réponse du navigateur resterait la réponse à une requête POST. Or F5
+(ou Ctrl+R, ou « Recharger ») rejoue la dernière requête, donc le
+POST, donc l'INSERT :
+
+- le même étudiant est inséré une deuxième fois : doublon (erreur
+  1062 sur cne/email) ou, si les clés UNIQUE ne l'arrêtaient pas,
+  lignes en double dans la table ;
+- le navigateur affiche en plus « Confirmer le renvoi du formulaire »
+  (données de formulaire déjà envoyées), ce qui est déroutant ;
+- l'URL reste ajouter.php : impossible de mettre la liste en favori,
+  et chaque rechargement rejoue une écriture.
+
+Avec Post/Redirect/Get :
+   POST ajouter.php  ->  INSERT  ->  302 Location: liste.php?ajout=4
+                                    ->  GET liste.php?ajout=4
+la dernière requête du navigateur est un GET. F5 ne rejoue alors que
+la lecture : la base n'est plus modifiée, le message de succès reste
+cohérent, et l'URL devient partageable. C'est pour la même raison que
+la suppression se fait en POST puis redirige vers liste.php?supprime=1,
+et non par un lien GET qui modifierait la base.
+
+
+---------------------------------------------------------------------
+QUESTION 4 (BONUS) — bindParam() et bindValue()
+---------------------------------------------------------------------
+
+- bindValue($marqueur, $valeur, $type) : copie la valeur au moment de
+  l'appel. La variable peut ensuite changer, c'est l'ancienne valeur
+  qui sera utilisée.
+- bindParam($marqueur, $variable, $type) : lie la variable par
+  référence. La valeur réellement envoyée est lue au moment de
+  execute(). De plus bindParam n'accepte qu'une variable (pas une
+  expression comme '%' . $x . '%'), alors que bindValue accepte
+  n'importe quelle valeur.
+
+Exemple où les deux donnent un résultat différent :
+
+    $nom = 'Alaoui';
+
+    $stmt = $pdo->prepare('SELECT * FROM etudiants WHERE nom = :nom');
+    $stmt->bindParam(':nom', $nom);
+    $nom = 'Bennani';
+    $stmt->execute();
+    // bindParam : lit la variable à l'exécution -> cherche Bennani
+
+    $nom = 'Alaoui';
+
+    $stmt = $pdo->prepare('SELECT * FROM etudiants WHERE nom = :nom');
+    $stmt->bindValue(':nom', $nom);
+    $nom = 'Bennani';
+    $stmt->execute();
+    // bindValue : valeur figée à la liaison -> cherche Alaoui
+
+C'est exactement pour cela que le filtre par filière (bonus 5.1)
+utilise bindParam() alors que l'insertion (3.2.c) utilise bindValue() :
+peu importe ici, les deux conviennent, mais bindParam est indispensable
+dans une boucle où la même requête est réexécutée avec une variable
+qui change à chaque tour.
+
+
+---------------------------------------------------------------------
+BONUS 5.3 — défis supplémentaires réalisés
+---------------------------------------------------------------------
+
+- Recherche par nom/prénom : champ « Rechercher un nom… » dans
+  liste.php, requête préparée avec LIKE :motif_nom / :motif_prenom
+  (motif '%' . $recherche . '%') combinable avec le filtre par
+  filière. Les valeurs sont passées directement à execute([...]).
+  Une saisie comme ' OR 1=1 -- ne renvoie aucune ligne : elle est
+  traitée comme du texte.
+- modifier.php : SELECT préparé par id pour pré-remplir le formulaire,
+  puis UPDATE préparé (execute() avec tableau de paramètres), gestion
+  du doublon 1062, redirection PRG vers liste.php?modifie=1.
+- Le DELETE et le filtre restent en requêtes préparées, les affichages
+  passent tous par e().
+
+=====================================================================
